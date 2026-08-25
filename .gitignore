@@ -1,0 +1,8 @@
+# only code
+*
+!*/
+!*.py
+!*.gitignore
+!README.md
+# IDE
+/.idea/
