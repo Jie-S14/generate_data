@@ -38,9 +38,11 @@ import csv
 import itertools
 import json
 import warnings
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, replace
 from typing import List, Tuple, Optional, Dict, Any
-
+from position_sampling_ood import *
+from matplotlib import colors
 import numpy as np
 
 
@@ -179,6 +181,7 @@ class RoleSpec:
 
 # 跨物体碰撞检查距离：物理安全边界，与角色无关，不放进 RoleSpec
 CROSS_OBJECT_MIN_DIST: float = 0.15
+CROSS_CUBE_MIN_DIST: float = 0.1
 
 # 各角色的默认规格 —— 按你的最新讨论：box 的 r/theta 范围比 cube 窄很多
 CUBE_SPEC = RoleSpec(
@@ -191,7 +194,7 @@ CUBE_SPEC = RoleSpec(
 BOX_SPEC = RoleSpec(
     r_min=0.25, r_max=0.35,
     theta_deg_min=-80.0, theta_deg_max=80.0,   # ±10°
-    orientation_deg_min=80.0, orientation_deg_max=100.0,  # ±10°
+    orientation_deg_min=90.0, orientation_deg_max=90.0,  # ±10°
     target_min_dist=0.05,
 )
 
@@ -243,8 +246,13 @@ def pair_targets_with_repair(
         if d >= min_dist:
             continue
         fixed = False
-        for _ in range(max_attempts):
-            j = rng.integers(n)
+        # No-return sampling
+        candidates = rng.permutation(n)
+        for j in candidates:
+
+        # Original method
+        # for _ in range(max_attempts):
+        #     j = rng.integers(n)
             if j == i:
                 continue
             d_i_new = np.hypot(*(pos_a[i] - pos_b[j]))
@@ -253,6 +261,7 @@ def pair_targets_with_repair(
                 pos_b[[i, j]] = pos_b[[j, i]]
                 fixed = True
                 break
+            
         if not fixed:
             unresolved += 1
     if unresolved > 0:
@@ -369,7 +378,7 @@ def generate_D0_joint_dataset(
             "episode_id": ep, "stage": "D0-joint",
             "objects": [
                 make_object("cube", "red", cube_pos[ep, 0], cube_pos[ep, 1], rng, role_specs),
-                make_object("box", "red", box_pos[ep, 0], box_pos[ep, 1], rng, role_specs),
+                make_object("box", "blue", box_pos[ep, 0], box_pos[ep, 1], rng, role_specs),
             ],
             "instruction": "pick up the cube and place it in the box",
         })
@@ -388,7 +397,8 @@ def generate_D0a_cubeOnly_dataset(
     rng = np.random.default_rng(seed)
     role_specs = {"cube": cube_spec, "box": box_spec}
 
-    box_anchors = generate_anchors(n_anchor, box_spec, rng)
+    # box_anchors = generate_anchors(n_anchor, box_spec, rng)
+    box_anchors = np.array([[0.08, 0.3]])
     cube_pos = generate_manipulation_positions(n_episodes, cube_spec, rng)
     box_pos = tile_anchors(box_anchors, n_episodes, rng)
     box_pos = pair_targets_with_repair(cube_pos, box_pos, cross_min_dist, rng)
@@ -400,7 +410,7 @@ def generate_D0a_cubeOnly_dataset(
             "objects": [
                 make_object("cube", "red", cube_pos[ep, 0], cube_pos[ep, 1], rng,
                             role_specs, is_target=True),
-                make_object("box", "red", box_pos[ep, 0], box_pos[ep, 1], rng,
+                make_object("box", "blue", box_pos[ep, 0], box_pos[ep, 1], rng,
                             role_specs, is_target=False,)
                             # fixed_orientation=box_spec.canonical_orientation),
             ],
@@ -434,7 +444,7 @@ def generate_D0b_boxOnly_dataset(
                 make_object("cube", "red", cube_pos[ep, 0], cube_pos[ep, 1], rng,
                             role_specs, is_target=False,),
                             # fixed_orientation=cube_spec.canonical_orientation),
-                make_object("box", "red", box_pos[ep, 0], box_pos[ep, 1], rng,
+                make_object("box", "blue", box_pos[ep, 0], box_pos[ep, 1], rng,
                             role_specs, is_target=True),
             ],
             "instruction": "pick up the cube and place it in the box",
@@ -443,46 +453,138 @@ def generate_D0b_boxOnly_dataset(
 
 
 # =====================================================================
-# 8. D1 / D2 / D3 (改为吃 cube_spec / box_spec 两个 RoleSpec)
+# 8. D1 / D2 / D3 (改为 cube_spec / box_spec 两个 RoleSpec)
 # =====================================================================
 
 def generate_D1_dataset(
     episodes_per_combo: int,
     cube_spec: RoleSpec = CUBE_SPEC, box_spec: RoleSpec = BOX_SPEC,
     cross_min_dist: float = CROSS_OBJECT_MIN_DIST,
-    colors: Tuple[str, str] = ("red", "blue"), seed: int = 1,
+    cross_cube_min_dist: float = CROSS_CUBE_MIN_DIST,
+    colors: Tuple[str, str] = ("red", "green"), seed: int = 1,
 ) -> List[Dict[str, Any]]:
     rng = np.random.default_rng(seed)
     role_specs = {"cube": cube_spec, "box": box_spec}
-    total = episodes_per_combo * len(colors)
-    cube_target_pos = generate_manipulation_positions(total, cube_spec, rng)
-    box_pos = generate_manipulation_positions(total, box_spec, rng)
+    # total = episodes_per_combo * len(colors)
+    cube_target_pos = generate_manipulation_positions(episodes_per_combo, cube_spec, rng)
+    cube_target_pos2 = generate_manipulation_positions(episodes_per_combo, cube_spec, rng)
+    cube_target_pos2 = pair_targets_with_repair(cube_target_pos, cube_target_pos2, cross_min_dist, rng)
+    # box_pos = generate_manipulation_positions(total, box_spec, rng)
+    box_anchors = np.array([[0.1587524224168821,0.29708797841740014]])
+    box_pos = tile_anchors(box_anchors, episodes_per_combo, rng)
     box_pos = pair_targets_with_repair(cube_target_pos, box_pos, cross_min_dist, rng)
+    box_pos = pair_targets_with_repair(cube_target_pos2, box_pos, cross_min_dist, rng)
 
+    target_color = colors[0]
+    distractor_color = colors[1]
+    task1 = f"pick up the {target_color} cube and place it in the box"
+    task2 = f"pick up the {distractor_color} cube and place it in the box"
     episodes = []
-    for ep in range(total):
-        target_color = colors[ep % len(colors)]
-        distractor_color = colors[(ep + 1) % len(colors)]
-        distractor_pos = sample_free_position(
-            [cube_target_pos[ep], box_pos[ep]], cube_spec, cross_min_dist, rng)
+    for ep in range(episodes_per_combo):
 
         episodes.append({
             "episode_id": ep, "stage": "D1",
             "objects": [
                 make_object("cube", target_color, *cube_target_pos[ep], rng, role_specs, is_target=True),
-                make_object("cube", distractor_color, *distractor_pos, rng, role_specs, is_target=False),
-                make_object("box", "neutral", *box_pos[ep], rng, role_specs),
+                make_object("cube", distractor_color, *cube_target_pos2[ep], rng, role_specs, is_target=False),
+                make_object("box", "blue", *box_pos[ep], rng, role_specs),
+            ],
+            "instruction": task1,
+        })
+    # Update cube's is_target and instruction 
+    for ep in range(episodes_per_combo):
+        ep_copy = copy.deepcopy(episodes[ep])
+        ep_copy["episode_id"] += episodes_per_combo
+        ep_copy["instruction"] = task2
+        for obj in ep_copy["objects"]:
+            if obj["role"] == "cube":
+                if obj.get("is_target", True):
+                    obj["is_target"] = False
+                else:
+                    obj["is_target"] = True
+        # epcopy["objects"] = objects_copy
+        episodes.append(ep_copy)
+
+    return episodes
+
+
+def generate_D1_paired_dataset(
+    n_pairs: int,
+    colors=("red", "green"),
+    cube_spec: RoleSpec = CUBE_SPEC,
+    box_spec: RoleSpec = BOX_SPEC,
+    cross_min_dist: float = CROSS_OBJECT_MIN_DIST,
+    pool_min_dist: float = 0.02,  # 局部放松，仅用于本generator，不改全局CUBE_SPEC
+    seed: int = 1,
+    rng: np.random.Generator = None,
+) -> List[Dict[str, Any]]:
+    """D1语言接地阶段的paired版本：每个skeleton(两个物理位置)固定，
+    红/绿两条instruction共享同一场景；红绿在数据集里的位置分布
+    严格50/50均衡分配，且池子容量经过验证足够2*n_pairs个点互不重复。
+    输出顺序：先全部red episode，再全部green episode（非交错）。
+    """
+    if rng is None:
+        rng = np.random.default_rng(seed)
+
+    # 放松采样间距，保证池子容量 >= 2*n_pairs，一次性拿到互不重复的点，
+    # 不触发 generate_manipulation_positions 内部的"循环复用"逻辑
+    local_cube_spec = replace(cube_spec, target_min_dist=pool_min_dist)
+    pts = generate_manipulation_positions(2 * n_pairs, local_cube_spec, rng)
+    assert len(pts) == 2 * n_pairs, (
+        f"池子容量不足以提供{2*n_pairs}个互不重复的点(实际{len(pts)}个)，"
+        f"请进一步调小pool_min_dist"
+    )
+    pos_a, pos_b = pts[0::2], pts[1::2]  # 各n_pairs个，彼此互不重复
+
+    # 场景内两个cube必须满足碰撞安全距离(0.15)——只是重排pos_b内部顺序，
+    # 不产生新点、不引入重复
+    pos_b = pair_targets_with_repair(pos_a, pos_b, cross_min_dist, rng)
+
+    # box_pos = generate_manipulation_positions(n_pairs, box_spec, rng)
+    box_anchors = np.array([[0.1587524224168821,0.29708797841740014]])
+    box_pos = tile_anchors(box_anchors, n_pairs, rng)
+    box_pos = pair_targets_with_repair(pos_a, box_pos, cross_min_dist, rng)
+    box_pos = pair_targets_with_repair(pos_b, box_pos, cross_min_dist, rng)
+
+    # 先把每个skeleton的红绿位置分配定死——用确定性奇偶交替而不是逐个
+    # 掷硬币，保证严格50/50（红绿各占一半pos_a、一半pos_b），
+    # 这个分配在两个颜色的输出块里必须保持一致，所以要提前算好、存起来
+    skeletons = []
+    for i in range(n_pairs):
+        if i % 2 == 0:
+            red_pos, green_pos = pos_a[i], pos_b[i]
+        else:
+            red_pos, green_pos = pos_b[i], pos_a[i]
+        skeletons.append({"red": red_pos, "green": green_pos, "box": box_pos[i]})
+
+    role_specs = {"cube": cube_spec, "box": box_spec}
+
+    def make_episode(target_color: str, ep: int, skeleton: Dict[str, np.ndarray]) -> Dict[str, Any]:
+        distractor_color = [c for c in colors if c != target_color][0]
+        return {
+            "episode_id": ep, "stage": "D1",
+            "objects": [
+                make_object("cube", target_color, *skeleton[target_color],
+                            rng, role_specs, is_target=True),
+                make_object("cube", distractor_color, *skeleton[distractor_color],
+                            rng, role_specs, is_target=False),
+                make_object("box", "blue", *skeleton["box"], rng, role_specs),
             ],
             "instruction": f"pick up the {target_color} cube and place it in the box",
-        })
-    return episodes
+        }
+
+    # 先全部red，再全部green——两个block用的是同一份skeletons，
+    # 保证第i个red episode和第i个green episode共享完全相同的物理场景
+    dataset = [make_episode("red", idx, sk) for idx, sk in enumerate(skeletons)]
+    dataset += [make_episode("green", idx+len(skeletons), sk) for idx, sk in enumerate(skeletons)]
+    return dataset
 
 
 def generate_D2_dataset(
     episodes_per_combo: int,
     cube_spec: RoleSpec = CUBE_SPEC, box_spec: RoleSpec = BOX_SPEC,
     cross_min_dist: float = CROSS_OBJECT_MIN_DIST,
-    colors: Tuple[str, str] = ("red", "blue"), seed: int = 2,
+    colors: Tuple[str, str] = ("red", "green"), seed: int = 2,
 ) -> List[Dict[str, Any]]:
     rng = np.random.default_rng(seed)
     role_specs = {"cube": cube_spec, "box": box_spec}
@@ -514,7 +616,7 @@ def generate_D3_dataset(
     episodes_per_combo: int,
     cube_spec: RoleSpec = CUBE_SPEC, box_spec: RoleSpec = BOX_SPEC,
     cross_min_dist: float = CROSS_OBJECT_MIN_DIST,
-    colors: Tuple[str, str] = ("red", "blue"), seed: int = 3,
+    colors: Tuple[str, str] = ("red", "green"), seed: int = 3,
 ) -> List[Dict[str, Any]]:
     rng = np.random.default_rng(seed)
     role_specs = {"cube": cube_spec, "box": box_spec}
@@ -643,34 +745,47 @@ def check_orientation_ranges(
 # 10. 示例用法
 # =====================================================================
 if __name__ == "__main__":
-    master_seed = 42
+    master_seed = 1728 # 1000  1888 42 62 1728 1544 1906
 
     # ---- D0 三件套 ----
     # D0-joint 组合空间是 D0a/D0b 的笛卡尔积，给更高的 episode 预算；
     # D0a / D0b 保持相同 episode 数，避免"数据量差异"成为新的 confound。
-    d0_joint = generate_D0_joint_dataset(n_episodes=150, seed=0 + master_seed)
-    d0a = generate_D0a_cubeOnly_dataset(n_episodes=100, n_anchor=4, seed=10 + master_seed)
-    d0b = generate_D0b_boxOnly_dataset(n_episodes=100, n_anchor=4, seed=20 + master_seed)
+    # d0_joint = generate_D0_joint_dataset(n_episodes=100, seed=0 + master_seed)
+    # d0a = generate_D0a_cubeOnly_dataset(n_episodes=100, n_anchor=1, seed=master_seed)
+    # d0b = generate_D0b_boxOnly_dataset(n_episodes=100, n_anchor=4, seed=20 + master_seed)
 
     # ---- D1 / D2 / D3 (需要时取消注释) ----
     d1: List[Dict[str, Any]] = []
     d2: List[Dict[str, Any]] = []
     d3: List[Dict[str, Any]] = []
-    # d1 = generate_D1_dataset(episodes_per_combo=100, seed=1 + master_seed)
+    # d1 = generate_D1_dataset(episodes_per_combo=50, seed=1 + master_seed)
+    # d1 = generate_D1_paired_dataset(n_pairs=50, seed=1 + master_seed)  # 生成 D1 的 paired 版本
     # d2 = generate_D2_dataset(episodes_per_combo=100, seed=2 + master_seed)
     # d3 = generate_D3_dataset(episodes_per_combo=100, seed=3 + master_seed)
 
+    # OOD
+    box_anchors = np.array([[0.08,0.3]])
+    # d0_ood = generate_OOD_cube_dataset(n_episodes=100, box_anchors=box_anchors, seed=master_seed)
+    d0_ood = generate_ID_outer_cube_dataset(n_episodes=100, box_anchors=box_anchors, seed=master_seed)
+    # d0_ood = generate_OOD_orientation_dataset(n_episodes=100, box_anchors=box_anchors, seed=master_seed)
+
     all_datasets = [
-        ("D0-joint", d0_joint), ("D0a-cubeOnly", d0a), ("D0b-boxOnly", d0b),
-        ("D1", d1), ("D2", d2), ("D3", d3),
+        # ("D0a-cubeOnly", d0a),
+        # ("D0-joint", d0_joint),("D0a-cubeOnly", d0a), ("D0b-boxOnly", d0b),
+        # ("D1", d1), ("D2", d2), ("D3", d3),
+        ("D0-ood", d0_ood),
     ]
 
     for name, data in all_datasets:
         if len(data) > 0:
-            export_csv(data, f"45_135_025_045/{name}_episodes.csv")
+            export_csv(data, f"ood/{name}_inner_eval_100ep_seed1728.csv")
             n_bad = check_min_distance_violations(data, CROSS_OBJECT_MIN_DIST)
-            print(f"{name}: {len(data)} episodes, 碰撞违规数 = {n_bad}")
+            print(f"{name}: {len(data)} episodes, seed: {master_seed}, 碰撞违规数 = {n_bad}")
             check_target_coverage(data, "cube")
             check_target_coverage(data, "box")
             check_orientation_ranges(data)
             print()
+
+    # for i in range(20):
+    #     orientation = sample_orientation(-30.0, 30.0, np.random.default_rng())
+    #     print(orientation)
